@@ -260,10 +260,10 @@ def generate_values(
 def format_cfg(generated: Dict[str, List[Tuple[str, int]]]) -> str:
     lines: List[str] = []
     for register_name, fields in generated.items():
-        tail = "================"
-        lines.append(f"#======== {register_name} {tail}")
+        tail = "===================="
+        lines.append(f"#================ {register_name} {tail}")
         for field_name, value in fields:
-            lines.append(f"{field_name:<32}: {value}")
+            lines.append(f"{field_name:<48}: {value}")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 

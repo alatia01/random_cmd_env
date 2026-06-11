@@ -40,7 +40,14 @@
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-[Gates determined based on constitution file]
+- Register source compliance: Confirm `reg_data.h` + `t_reg_vcpi` is the single source of truth.
+- Language/runtime compliance: Confirm Python 3 only and standard library only.
+- Delivery shape compliance: Confirm implementation remains a single script file.
+- Design compliance: Confirm each planned function has a single responsibility.
+- Quality compliance: Confirm plan includes reproducible randomness (seeded mode) and
+  structured, verifiable output.
+- Documentation compliance: Confirm non-trivial parsing/generation paths include complete
+  rationale comments in code.
 
 ## Project Structure
 

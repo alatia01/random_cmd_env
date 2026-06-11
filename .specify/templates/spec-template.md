@@ -98,6 +98,19 @@
 - **FR-006**: System MUST authenticate users via [NEEDS CLARIFICATION: auth method not specified - email/password, SSO, OAuth?]
 - **FR-007**: System MUST retain user data for [NEEDS CLARIFICATION: retention period not specified]
 
+## Constitution Alignment *(mandatory)*
+
+- **CA-001 Source of Truth**: Feature MUST identify how it reads or maps `reg_data.h`
+  definitions (especially `t_reg_vcpi`) without duplicating bitfield specs.
+- **CA-002 Runtime Constraints**: Feature MUST run on Python 3 and standard library only.
+- **CA-003 Delivery Shape**: Feature MUST preserve single-script implementation.
+- **CA-004 Function Design**: Feature MUST describe function boundaries with single
+  responsibilities.
+- **CA-005 Verifiability**: Feature MUST define reproducibility strategy (seed handling)
+  and structured output checks.
+- **CA-006 Maintainability**: Feature MUST list non-obvious logic requiring explanatory
+  comments.
+
 ### Key Entities *(include if feature involves data)*
 
 - **[Entity 1]**: [What it represents, key attributes without implementation]

@@ -52,6 +52,8 @@ description: "Task list template for feature implementation"
 - [ ] T001 Create project structure per implementation plan
 - [ ] T002 Initialize [language] project with [framework] dependencies
 - [ ] T003 [P] Configure linting and formatting tools
+- [ ] T004 Confirm single-script delivery target (e.g., src/tool.py)
+- [ ] T005 Confirm Python 3 standard-library-only dependency baseline
 
 ---
 
@@ -69,6 +71,10 @@ Examples of foundational tasks (adjust based on your project):
 - [ ] T007 Create base models/entities that all stories depend on
 - [ ] T008 Configure error handling and logging infrastructure
 - [ ] T009 Setup environment configuration management
+- [ ] T010 Implement parser for reg_data.h definitions with t_reg_vcpi as source of truth
+- [ ] T011 [P] Implement bitfield width/range validator for generated values
+- [ ] T012 [P] Implement reproducible random strategy (seed in/out)
+- [ ] T013 Define structured output contract for automatic verification
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel
 
@@ -86,6 +92,8 @@ Examples of foundational tasks (adjust based on your project):
 
 - [ ] T010 [P] [US1] Contract test for [endpoint] in tests/contract/test_[name].py
 - [ ] T011 [P] [US1] Integration test for [user journey] in tests/integration/test_[name].py
+- [ ] T012 [P] [US1] Reproducibility test with fixed seed in tests/unit/test_seed_reproducibility.py
+- [ ] T013 [P] [US1] Bitfield boundary test in tests/unit/test_bitfield_limits.py
 
 ### Implementation for User Story 1
 

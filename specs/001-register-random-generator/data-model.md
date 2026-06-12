@@ -24,6 +24,48 @@
   - `0 < width <= 32`。
   - 若 `lsb/msb` 存在，则 `msb - lsb + 1 == width`。
 
+## Entity: FieldConstraint (2026-06-12 更新)
+- Purpose: 表示从 vcpi.xlsx 提取的字段级约束信息，存储于 `VCPI_FIELD_CONSTRAINTS` 静态字典。
+- Key: `(register_name: str, field_name: str)` 元组
+- Fields:
+  - `c` (tuple | null): 约束类型
+    - `('fixed', value: int)`: 固定值
+    - `('range', lo: int, hi: int)`: 范围约束
+  - `r` (int | null): 复位值（列 H）
+  - `d` (str | null): 描述摘要（列 I 前 80 字符）
+  - `w` (int): 位宽（列 G 解析结果，已验证）
+  - `a` (dict | null): 对齐约束（2026-06-12 新增）
+    - `{'default': int}`: 通用对齐（如 `{'default': 4}` 表示 4 像素对齐）
+    - `{'hevc': int, 'h264': int, 'jpeg': int}`: 协议特定对齐
+  - `m` (bool | null): minus1 config 标记（2026-06-12 新增）
+    - `True`: 字段使用 minus1 存储格式（实际值 = 配置值 + 1）
+    - 对齐约束应用于实际值，存储时减 1
+    - 示例：ve_pic_height/width, ve_num_tile_columns_minus1, ve_num_tile_rows_minus1
+- Validation:
+  - 若 `c` 为 range，则 `lo <= hi` 且 `hi <= 2^w - 1`
+  - 若 `a` 存在，对齐值必须为 2 的幂（1, 2, 4, 8, 16）
+  - 若 `m` 为 True 且 `a` 存在，对齐应用于 `value+1` 而非 `value`
+- Examples:
+  ```python
+  ("VCPI_PIC_SIZE", "ve_pic_width"): {
+      "c": ('range', 63, 8191),
+      "r": 127,
+      "d": "the picture width for enc view...",
+      "w": 16,
+      "a": {'hevc': 8, 'h264': 16, 'jpeg': 16},
+      "m": True  # 存储值 = 实际像素值 - 1
+  }
+  
+  ("VCPI_SRC_MOSAIC_POS_0", "ve_mosaic_0_st_x"): {
+      "c": ('range', 0, 8188),
+      "r": 0,
+      "d": "Mosaic_0_START_X,4pixel align",
+      "w": 16,
+      "a": {'default': 4}
+      # 无 "m" 字段，对齐直接应用于配置值
+  }
+  ```
+
 ## Entity: RegisterSelection
 - Purpose: 来自 `register_selection.json` 的寄存器参与开关条目。
 - Fields:

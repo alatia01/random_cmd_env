@@ -26,9 +26,30 @@
 
 **Performance Goals**: 在 1000 位域规模下 5 秒内完成生成
 
-**Constraints**: 单脚本；标准库-only；`reg_data.h` 为唯一寄存器定义来源；稳定输出顺序；seed 可复现；运行时不读取 `random_require.md`
+**Constraints**: 
+- 单脚本；标准库-only
+- `reg_data.h` 为唯一寄存器定义来源
+- 稳定输出顺序；seed 可复现
+- 运行时不读取 `random_require.md`
+- **约束来源**: `VCPI_FIELD_CONSTRAINTS` 静态字典（从 vcpi.xlsx 一次性提取并硬编码）
+  - 包含 919 个字段的约束信息
+  - 138 个字段带对齐约束（2/4/8/16 像素对齐）
+  - 505 个字段带范围/固定值约束
+  - 支持协议特定对齐（HEVC: 8像素, H.264/JPEG: 16像素）
 
 **Scale/Scope**: 覆盖 `t_reg_vcpi` 下全部寄存器，最终随机范围由 JSON 选择文件控制
+
+**Key Implementation Details**:
+- **Verilog 数字解析**: 支持 `16'd8190` (十进制), `16'hFF` (十六进制), `4'b1010` (二进制), `4'o7` (八进制)
+- **对齐约束应用**: 使用 `pick_aligned(rng, lo, hi, alignment)` 确保生成值符合像素对齐要求
+- **多协议对齐处理**: 对于 `{'hevc': 8, 'h264': 16, 'jpeg': 16}` 取最大值 (16) 以满足所有协议
+- **位宽验证**: 所有约束范围已验证不超过字段实际位宽 (列 G vs 列 J)
+- **minus1 config 处理**: 对标记为"minus1 config"的字段（如 ve_pic_height/width）：
+  1. 先按对齐约束生成对齐的实际值 V（如 2880 满足 16 对齐）
+  2. 验证 V 在约束范围 [min, max] 内
+  3. 存储 V-1 至配置文件（如存储 2879）
+  4. 对齐约束应用于**实际值**（配置值+1），而非配置值本身
+  5. 确保硬件读取时通过 +1 还原得到满足编解码器对齐要求的实际尺寸
 
 ## Constitution Check (Pre-Design Gate)
 

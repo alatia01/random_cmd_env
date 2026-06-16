@@ -78,6 +78,54 @@
   - 报错停止: 过于严格，不利于部分约束缺失场景。
 
 ## Decision 11: minus1 config 字段处理策略 (2026-06-12)
+
+(原有内容保留，略)
+
+---
+
+## Decision 12: C 解析器与 Python 生成器多语言协同策略 (2026-06-15)
+- Decision: 以 `cmd.cfg` 文本格式作为两语言的解耦接口。Python 负责随机生成并写出 cfg，C 负责解析 cfg 并组装 `t_reg_vcpi` 结构体传给下游 API。两者共享同一个 `reg_data.h`。
+- Rationale: 职责清晰，可独立开发和测试；文本格式天然可视化、可 diff。
+- Alternatives considered:
+  - 直接生成 C 头文件：C 代码可读性下降且强依赖 Python 工具链。
+  - 共享内存/IPC：部署复杂度不必要地增加。
+
+## Decision 13: cfg 分隔符三段式规范 (2026-06-15)
+- Decision: Python 生成器 MUST 写冒号（`field : value`）；C 解析器读取时同时兼容冒号与等号；调试打印 `print_vcpi_debug_dump` MUST 使用等号（`field = value`），字段名右对齐，与 reg_data.h 结构体定义风格一致。
+- Rationale: 向后兼容（现有 cmd.cfg 为冒号），调试打印可读性优先（等号+右对齐与头文件一致）。
+- Alternatives considered:
+  - 全链路统一等号：需迁移全部现存 cfg 文件。
+  - 全链路统一冒号：调试打印可读性低于 reg_data.h 风格。
+
+## Decision 14: 数组类型成员 JSON 与 cfg 格式规范 (2026-06-15)
+- Decision:
+  1. JSON 中数组成员 MUST 声明 `indices` 字段（整数列表或 `"all"`）；缺失视为快速失败。
+  2. `"indices":"all"` 等价于 `[0, 1, ..., array_len-1]`。
+  3. cfg 中数组成员每个启用下标独立输出一个 section，section 头为 `MEMBER_NAME[N]`。
+  4. C 解析器 section 头中 `[N]` 接受十进制整数或 `all`；其他格式跳过该行。
+- Rationale: 精细控制数组下标的随机性，与现有单元素成员保持格式统一，便于人工阅读和自动化 diff。
+- Alternatives considered:
+  - 每个数组元素写成独立 JSON 条目 `VCPI_QPG_LAMBDA[0]`：JSON 文件行数爆炸（52项×条目），维护成本高。
+  - 整体选择不支持下标控制：粒度太粗，无法按需随机部分元素。
+
+## Decision 15: C 解析器错误策略 (2026-06-15)
+- Decision:
+  - 未知字段：立即失败，stderr 输出 section 名 + 字段名。
+  - 重复字段：立即失败，stderr 输出 section 名 + 字段名。
+  - 缺失 section/字段：以 0 填充，不报错。
+  - 数组越界下标：立即失败，stderr 输出成员名 + 下标。
+  - 重复数组 section（相同 `MEMBER[N]`）：立即失败，stderr 输出成员名 + 下标。
+- Rationale: 未知/重复属配置错误，静默跳过会掩盖硬件配置风险；缺失属部分配置，0 默认值语义明确（与 memset 一致）。
+- Alternatives considered:
+  - 全部 warn-only：无法保证硬件配置正确性。
+  - 全部失败：缺失字段过于严格，无法支持部分寄存器 cfg。
+
+## Decision 16: C 接口 API 传参规范 (2026-06-15)
+- Decision: 提供按值与按 `const t_reg_vcpi*` 传参两种 API 入口；实现层统一走 `const t_reg_vcpi*` 路径，按值入口为薄包装层。
+- Rationale: 兼容不同调用场景（栈分配 vs 堆分配），按指针避免大结构体拷贝开销。
+- Alternatives considered:
+  - 仅提供指针入口：部分调用场景需要额外取地址操作。
+  - 仅提供按值入口：大结构体栈拷贝开销不可忽视。
 - Decision: 对 vcpi.xlsx 列 I 描述中标记为"minus1 config"的字段（如 ve_pic_height/width），对齐约束应用于**实际像素值**（配置值+1），生成流程为：
   1. 按对齐规则生成对齐的实际值 V（如 2880，16 的倍数）
   2. 验证 V 在约束范围 [min, max] 内

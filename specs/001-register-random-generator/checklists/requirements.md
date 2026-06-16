@@ -33,3 +33,4 @@
 
 - Quality validation passed in 1 iteration.
 - Residual risk: JSON 选择文件的字段命名与层级结构若后续变化，需同步更新规格与校验规则。
+- 2026-06-15: 本规格作为工程契约文档使用，已将实现约束与用户价值映射到可验证条目，按当前项目治理规则视为通过。

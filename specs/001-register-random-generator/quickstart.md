@@ -63,7 +63,73 @@
   - **实际值必须对齐**（如 2880 % 16 = 0）
   - 实际值在约束范围内：`64 <= actual_value <= 8192`（对应配置值 [63, 8191]）
 
-## Validation Scenario F: 非法 JSON
+## Validation Scenario G: 数组成员 JSON indices 选择 (2026-06-15 新增)
+
+```json
+{
+  "registers": [
+    {"name": "VCPI_PIC_INFO0", "enabled": true},
+    {"name": "VCPI_QPG_LAMBDA", "enabled": true, "indices": [0, 1]},
+    {"name": "VCPI_SAO_LAMBDA_GROUP", "enabled": true, "indices": "all"}
+  ]
+}
+```
+
+1. 运行生成器:
+   `python random_reg_cfg.py --header reg_data.h --select-json register_selection_array.json --out cmd_array.cfg`
+2. 预期结果:
+   - `cmd_array.cfg` 包含 `VCPI_QPG_LAMBDA[0]` 和 `VCPI_QPG_LAMBDA[1]` 两个 section。
+   - `VCPI_SAO_LAMBDA_GROUP[0]` 到 `VCPI_SAO_LAMBDA_GROUP[25]` 全部输出。
+   - 数组成员缺失 `indices` 字段时脚本以非零退出并报错。
+
+## Validation Scenario H: C 解析器编译与运行 (2026-06-15 新增)
+
+### 前置
+- GCC 或 MSVC 可用
+- `parse_cmd_cfg_to_vcpi.c` 与 `reg_data.h` 在同一目录
+
+### 编译（GCC 示例）
+```bash
+gcc -std=c99 -Wall -Wextra -Werror -o parse_cmd_cfg parse_cmd_cfg_to_vcpi.c
+```
+
+### 运行
+```bash
+./parse_cmd_cfg cmd.cfg reg_data.h
+```
+
+### 预期结果
+- 标准输出打印 `VCPI_PIC_INFO0 = 0xXXXXXXXX` 格式的调试转储。
+- 字段名**右对齐**（同 section 内对齐至最长字段名），使用等号分隔。
+- 数组成员显示为 `VCPI_QPG_LAMBDA[0] = 0xXXXXXXXX` 格式。
+- 最后打印 `API called, first register=0xXXXXXXXX`。
+- 退出码为 0。
+
+### 错误场景验证
+1. 未知字段测试：在 cmd.cfg 中某 section 添加虚构字段名。预期：非零退出 + stderr 错误信息含 section 名 + 字段名。
+2. 重复字段测试：在 cmd.cfg 中同一 section 复制一行字段。预期：非零退出 + stderr 含重复字段名。
+3. 缺失 section 测试：删除 cmd.cfg 中某个 section。预期：正常解析，该 section 对应字段为 0。
+4. 数组下标越界测试：新增 `VCPI_QPG_LAMBDA[99]` section（超出数组长度）。预期：非零退出 + stderr 含成员名与越界下标。
+5. 重复数组 section 测试：复制 `VCPI_QPG_LAMBDA[3]` section 形成两份。预期：非零退出 + stderr 含成员名与重复下标。
+
+## Validation Scenario I: 调试打印格式验证 (2026-06-15 新增)
+
+检查 `print_vcpi_debug_dump` 输出符合以下规则：
+1. 字段名在同一 section 内**右对齐**（等号在同列）。
+2. 值左对齐。
+3. `rsvd` 开头的保留字段不打印。
+4. 数组 section 头格式为 `MEMBER[N] = 0xHEX8`。
+
+预期输出片段示例（参见 a.log）：
+```
+VCPI_PIC_INFO0 = 0x0034FB46
+                 ve_frame_type = 2
+                   ve_protocol = 1
+                      ...
+VCPI_QPG_LAMBDA[0] = 0x001292C9
+    ve_sqrt_lambda0 = 201
+     ve_sel_lambda0 = 4754
+```
 1. 在 `register_selection.json` 中故意指定不存在寄存器或非法 JSON。
 2. 运行脚本。
 3. 预期结果:
@@ -150,3 +216,54 @@ ve_pic_width                    : 7615
   - 带范围约束: 505 (55%)
   - 带位宽验证: 919 (100%)
   - 位宽验证冲突: 0 (所有约束范围都在位宽限制内)
+
+### 2026-06-15 Phase 9 验证（数组成员 + C 解析器增强）
+
+**环境**: Python 3.x, GCC (C99), Windows PowerShell
+
+- **Scenario G: 数组成员 `indices` 选择 — PASS**
+  - 命令: `python random_reg_cfg.py --header reg_data.h --select-json register_selection.json --seed 42 --out cmd.cfg`
+  - 结果: 生成 358 个 register groups（含 7 个数组成员全部展开）
+  - `VCPI_QPG_LAMBDA[0]...[51]` 各自独立 section，section 头格式 `#================ VCPI_QPG_LAMBDA[N] ====================`
+  - 字段右对齐冒号格式：`ve_sqrt_lambda0 : 232`，`ve_sel_lambda0 : 11542`
+  - ✓ `"indices":"all"` 正确展开为全部下标
+
+- **Scenario H: C 解析器编译运行 — PASS**
+  - 编译: `gcc -std=c99 -Wall -Wextra -Werror -o parse_cmd_cfg parse_cmd_cfg_to_vcpi.c`，EXIT:0，零警告
+  - 运行: `.\parse_cmd_cfg.exe cmd.cfg reg_data.h`，EXIT:0
+  - 端到端值一致性验证（seed=42）：
+    ```
+    cmd.cfg:      ve_sqrt_lambda0 : 232,  ve_sel_lambda0 : 11542   (VCPI_QPG_LAMBDA[0])
+    C 输出: VCPI_QPG_LAMBDA[0] = 0x002D16E8
+                ve_sqrt_lambda0 = 232
+                 ve_sel_lambda0 = 11542
+    ```
+  - ✓ cmd.cfg 与 C 解析输出值完全一致
+
+- **Scenario I: 调试打印格式验证 — PASS**
+  - 数组 section 头：`VCPI_QPG_LAMBDA[0] = 0x002D16E8`（格式符合 FR-008c）
+  - 字段行：右对齐等号格式，`rsvd` 字段跳过，与 reg_data.h 风格一致
+  - ✓ VCPI_QPG_LAMBDA[0], [1], [2], [3] 全部按下标升序输出
+
+### 2026-06-15 增量验证（数组严格失败策略）
+
+- **Compile Recheck — PASS**
+  - 命令: `gcc -std=c99 -Wall -Wextra -Werror -o parse_cmd_cfg.exe parse_cmd_cfg_to_vcpi.c`
+  - 结果: 编译通过，零警告。
+
+- **Negative Test: 数组下标越界 section — PASS**
+  - 输入: `tmp_overflow.cfg` 包含 `VCPI_QPG_LAMBDA[99]`
+  - 命令: `parse_cmd_cfg.exe tmp_overflow.cfg reg_data.h`
+  - 结果: `EXIT:1`
+  - 错误: `Array index 99 out of range for member 'VCPI_QPG_LAMBDA' (len=52)`
+
+- **Negative Test: 重复数组 section — PASS**
+  - 输入: `tmp_dupsec.cfg` 两次声明 `VCPI_QPG_LAMBDA[3]`
+  - 命令: `parse_cmd_cfg.exe tmp_dupsec.cfg reg_data.h`
+  - 结果: `EXIT:1`
+  - 错误: `Duplicate array section 'VCPI_QPG_LAMBDA[3]'`
+
+- **Positive Recheck: 正常 cfg 解析 — PASS**
+  - 输入: `cmd.cfg`（seed=123 生成）
+  - 命令: `parse_cmd_cfg.exe cmd.cfg reg_data.h`
+  - 结果: `EXIT:0`

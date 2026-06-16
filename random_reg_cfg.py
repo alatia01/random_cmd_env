@@ -23,6 +23,8 @@ ERR_SELECTION_SCHEMA_INVALID = "E_SELECTION_SCHEMA_INVALID"
 ERR_SELECTION_TARGET_NOT_FOUND = "E_SELECTION_TARGET_NOT_FOUND"
 ERR_SELECTION_EMPTY_ACTIVE_SET = "E_SELECTION_EMPTY_ACTIVE_SET"
 ERR_HEADER_STRUCT_NOT_FOUND = "E_HEADER_STRUCT_NOT_FOUND"
+ERR_SELECTION_ARRAY_MISSING_INDICES = "E_SELECTION_ARRAY_MISSING_INDICES"
+ERR_SELECTION_ARRAY_INDEX_OUT_OF_RANGE = "E_SELECTION_ARRAY_INDEX_OUT_OF_RANGE"
 
 # ---------------------------------------------------------------------------
 # Field constraint table extracted from vcpi.xlsx (2026-06-12).
@@ -977,6 +979,9 @@ class RegisterSelection:
     name: str
     enabled: bool
     source_index: int
+    # indices is only required when the member is a struct-array in t_reg_vcpi.
+    # None means "not specified"; List[int] holds the validated, expanded indices.
+    indices: Optional[List[int]] = None
 
 
 def parse_args() -> argparse.Namespace:
@@ -1037,20 +1042,32 @@ def parse_bitfields(struct_body: str, register_name: str) -> List[BitFieldDef]:
     return fields
 
 
-def parse_vcpi_member_order(vcpi_struct_body: str) -> List[Tuple[str, str]]:
-    """Return ordered tuples of (register_name, typedef_name) under t_reg_vcpi."""
-    members: List[Tuple[str, str]] = []
+def parse_vcpi_member_order(vcpi_struct_body: str) -> List[Tuple[str, str, int]]:
+    """Return ordered tuples of (register_name, typedef_name, array_len) under t_reg_vcpi.
+
+    array_len is 1 for non-array members, >1 for members declared as TYPE NAME[N].
+    """
+    members: List[Tuple[str, str, int]] = []
     line_pattern = re.compile(
-        r"(?P<typedef>t_reg_\w+)\s+(?P<member>VCPI_[A-Z0-9_]+)(?:\s*\[\d+\])?\s*;"
+        r"(?P<typedef>t_reg_\w+)\s+(?P<member>VCPI_[A-Z0-9_]+)(?:\s*\[(?P<alen>\d+)\])?\s*;"
     )
     for line in vcpi_struct_body.splitlines():
         match = line_pattern.search(line)
         if match:
-            members.append((match.group("member"), match.group("typedef")))
+            alen = int(match.group("alen")) if match.group("alen") else 1
+            members.append((match.group("member"), match.group("typedef"), alen))
     return members
 
 
-def build_register_catalog(header_text: str) -> Dict[str, List[BitFieldDef]]:
+def build_register_catalog(
+    header_text: str,
+) -> Tuple[Dict[str, List[BitFieldDef]], Dict[str, int]]:
+    """Parse t_reg_vcpi from header_text.
+
+    Returns:
+        catalog: mapping register_name -> List[BitFieldDef]
+        array_lengths: mapping register_name -> array_len for array members (len > 1)
+    """
     structs = parse_struct_definitions(header_text)
     if "typedef struct" in header_text and not structs:
         raise ValueError(
@@ -1065,7 +1082,10 @@ def build_register_catalog(header_text: str) -> Dict[str, List[BitFieldDef]]:
     scalar_aliases = {m.group("name") for m in alias_pattern.finditer(header_text)}
 
     catalog: Dict[str, List[BitFieldDef]] = {}
-    for register_name, typedef_name in parse_vcpi_member_order(vcpi_body):
+    array_lengths: Dict[str, int] = {}
+    for register_name, typedef_name, alen in parse_vcpi_member_order(vcpi_body):
+        if alen > 1:
+            array_lengths[register_name] = alen
         body = structs.get(typedef_name)
         if not body:
             if typedef_name in scalar_aliases:
@@ -1075,7 +1095,7 @@ def build_register_catalog(header_text: str) -> Dict[str, List[BitFieldDef]]:
         fields = parse_bitfields(body, register_name)
         catalog[register_name] = fields
 
-    return catalog
+    return catalog, array_lengths
 
 
 def parse_selection_json(select_path: Path) -> List[RegisterSelection]:
@@ -1105,24 +1125,88 @@ def parse_selection_json(select_path: Path) -> List[RegisterSelection]:
             raise ValueError(
                 f"{ERR_SELECTION_SCHEMA_INVALID}: registers[{index}] requires name(str), enabled(bool)"
             )
-        selections.append(RegisterSelection(name=name, enabled=enabled, source_index=index))
+        # Store raw indices value; expansion and range validation happens in
+        # resolve_active_targets() where array_lengths is available.
+        raw_indices = item.get("indices")  # may be None, "all", or list
+        selections.append(
+            RegisterSelection(
+                name=name,
+                enabled=enabled,
+                source_index=index,
+                indices=raw_indices,  # type: ignore[arg-type]
+            )
+        )
 
     return selections
+
+
+_ARRAY_KEY_RE = re.compile(r"^(?P<base>\w+)\[(?P<idx>\d+)\]$")
 
 
 def resolve_active_targets(
     selections: List[RegisterSelection],
     catalog: Dict[str, List[BitFieldDef]],
+    array_lengths: Dict[str, int],
 ) -> List[str]:
-    status_by_name: Dict[str, bool] = {}
-    for selection in selections:
-        if selection.name not in catalog:
-            raise ValueError(
-                f"{ERR_SELECTION_TARGET_NOT_FOUND}: {selection.name} at index {selection.source_index}"
-            )
-        status_by_name[selection.name] = selection.enabled
+    """Return ordered list of target keys to generate.
 
-    targets = [name for name in catalog.keys() if status_by_name.get(name, False)]
+    Non-array members: plain register_name (e.g. 'VCPI_PIC_INFO0').
+    Array members: expanded 'MEMBER[N]' keys for each enabled index
+    (e.g. 'VCPI_QPG_LAMBDA[0]', 'VCPI_QPG_LAMBDA[1]').
+
+    Validation (fast-fail):
+    - Name must exist in catalog.
+    - Array members MUST declare `indices`; missing indices raises ARRAY_MISSING_INDICES.
+    - Index values must be in [0, array_len-1]; out-of-range raises ARRAY_INDEX_OUT_OF_RANGE.
+    """
+    # Preserve catalog insertion order for enabled members.
+    enabled_set: Dict[str, RegisterSelection] = {}
+    for sel in selections:
+        if sel.name not in catalog:
+            raise ValueError(
+                f"{ERR_SELECTION_TARGET_NOT_FOUND}: {sel.name} at index {sel.source_index}"
+            )
+        if sel.enabled:
+            enabled_set[sel.name] = sel
+
+    targets: List[str] = []
+    for register_name in catalog.keys():
+        sel = enabled_set.get(register_name)
+        if sel is None:
+            continue
+        if register_name in array_lengths:
+            alen = array_lengths[register_name]
+            raw = sel.indices
+            if raw is None:
+                # Array members MUST declare indices (FR-003b).
+                raise ValueError(
+                    f"{ERR_SELECTION_ARRAY_MISSING_INDICES}: '{register_name}' "
+                    f"at index {sel.source_index} - array members must declare 'indices'"
+                )
+            if raw == "all" or raw == ["all"]:
+                # Expand "all" to full range.
+                indices_list = list(range(alen))
+            elif isinstance(raw, list):
+                indices_list = []
+                for idx in raw:
+                    if not isinstance(idx, int) or idx < 0 or idx >= alen:
+                        raise ValueError(
+                            f"{ERR_SELECTION_ARRAY_INDEX_OUT_OF_RANGE}: "
+                            f"'{register_name}' index {idx} out of [0, {alen - 1}]"
+                        )
+                    indices_list.append(idx)
+                # Sort for stable output ordering.
+                indices_list = sorted(set(indices_list))
+            else:
+                raise ValueError(
+                    f"{ERR_SELECTION_SCHEMA_INVALID}: '{register_name}' indices must be "
+                    f"a list of ints or \"all\", got {type(raw).__name__}"
+                )
+            for idx in indices_list:
+                targets.append(f"{register_name}[{idx}]")
+        else:
+            targets.append(register_name)
+
     if not targets:
         raise ValueError(ERR_SELECTION_EMPTY_ACTIVE_SET)
     return targets
@@ -1237,40 +1321,61 @@ def generate_values(
     catalog: Dict[str, List[BitFieldDef]],
     seed: Optional[int],
 ) -> Tuple[Dict[str, List[Tuple[str, int]]], Dict[str, object]]:
+    """Generate random values for all target keys.
+
+    Targets may be plain names ('VCPI_PIC_INFO0') or array-indexed keys
+    ('VCPI_QPG_LAMBDA[0]').  Array-indexed keys use the base member name
+    for field and constraint lookup.
+    """
     rng = create_rng(seed)
 
     generated: Dict[str, List[Tuple[str, int]]] = {}
     applied_rule_mode: Dict[str, str] = {}
     metadata: Dict[str, object] = {"seed": seed, "applied_rule_mode": applied_rule_mode}
-    for register_name in targets:
+    for target_key in targets:
+        # Resolve base register name for catalog/constraint lookup.
+        arr_match = _ARRAY_KEY_RE.match(target_key)
+        register_name = arr_match.group("base") if arr_match else target_key
+
         fields = catalog.get(register_name)
         if fields is None:
             raise ValueError(f"{ERR_SELECTION_TARGET_NOT_FOUND}: register {register_name}")
 
         values: List[Tuple[str, int]] = []
         if not fields:
+            # Scalar (uint32_t alias) member: generate as single 32-bit value.
             value = generate_field_value(rng, register_name, register_name.lower(), 32)
             values.append((register_name.lower(), value))
-            applied_rule_mode[f"{register_name}.{register_name.lower()}"] = "FULL_RANDOM"
-            generated[register_name] = values
+            applied_rule_mode[f"{target_key}.{register_name.lower()}"] = "FULL_RANDOM"
+            generated[target_key] = values
             continue
 
         for field in fields:
             value = generate_field_value(rng, register_name, field.name, field.width)
             values.append((field.name, value))
-            applied_rule_mode[f"{register_name}.{field.name}"] = "FULL_RANDOM"
-        generated[register_name] = values
+            applied_rule_mode[f"{target_key}.{field.name}"] = "FULL_RANDOM"
+        generated[target_key] = values
 
     return generated, metadata
 
 
 def format_cfg(generated: Dict[str, List[Tuple[str, int]]]) -> str:
+    """Format generated values as cmd.cfg text.
+
+    - Section head: '#================ MEMBER_NAME ====================' or
+      '#================ MEMBER_NAME[N] ===================='
+    - Field lines: right-aligned field name (within section), colon separator.
+      This matches the reg_data.h struct style for readability.
+    - Python writes colon separator ('field : value') per spec contract v2.
+    """
     lines: List[str] = []
-    for register_name, fields in generated.items():
+    for section_name, fields in generated.items():
         tail = "===================="
-        lines.append(f"#================ {register_name} {tail}")
+        lines.append(f"#================ {section_name} {tail}")
+        # Right-align field names to max width within this section.
+        max_width = max((len(fn) for fn, _ in fields), default=0)
         for field_name, value in fields:
-            lines.append(f"{field_name:<48}: {value}")
+            lines.append(f"{field_name:>{max_width}} : {value}")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
@@ -1303,7 +1408,7 @@ def main() -> int:
     args = parse_args()
     try:
         header_text = read_text(Path(args.header))
-        catalog = build_register_catalog(header_text)
+        catalog, array_lengths = build_register_catalog(header_text)
         register_count, field_count = count_catalog(catalog)
 
         if args.dump_registers:
@@ -1312,7 +1417,7 @@ def main() -> int:
             return 0
 
         selections = parse_selection_json(Path(args.select_json))
-        targets = resolve_active_targets(selections, catalog)
+        targets = resolve_active_targets(selections, catalog, array_lengths)
         generated, metadata = generate_values(targets, catalog, args.seed)
         metadata["selected_registers"] = targets
         cfg_text = format_cfg(generated)

@@ -41,13 +41,13 @@
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
 - Register source compliance: Confirm `reg_data.h` + `t_reg_vcpi` is the single source of truth.
-- Language/runtime compliance: Confirm Python 3 only and standard library only.
-- Delivery shape compliance: Confirm implementation remains a single script file.
+- Language/runtime compliance: Confirm Python 3 for generator (standard library only) and C99/C11 for parser (standard C library only).
+- Delivery shape compliance: Confirm implementation remains single script per language (Python: .py, C: .c).
 - Design compliance: Confirm each planned function has a single responsibility.
 - Quality compliance: Confirm plan includes reproducible randomness (seeded mode) and
   structured, verifiable output.
 - Documentation compliance: Confirm non-trivial parsing/generation paths include complete
-  rationale comments in code.
+  rationale comments in code (applies to both Python and C).
 
 ## Project Structure
 

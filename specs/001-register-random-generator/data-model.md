@@ -71,10 +71,25 @@
 - Fields:
   - `name` (string): 寄存器名，例如 `VCPI_PIC_INFO0`。
   - `enabled` (bool): 是否参与随机。
+  - `indices` (list[int] | "all" | null): **仅数组类型成员必填**。指定参与随机的数组下标列表；`"all"` 表示全部元素；非数组成员该字段忽略。缺失时：若成员为数组类型则快速失败，若为非数组类型则忽略。
   - `source_index` (int): 在 JSON 列表中的位置，便于错误定位。
 - Validation:
   - `name` 必须存在于 `t_reg_vcpi` 解析结果中。
   - `enabled` 必须为布尔值。
+  - 若对应成员为数组类型，`indices` 不得为 null（快速失败）。
+  - `indices` 列表中的每个下标必须在 `[0, array_len-1]` 范围内（越界快速失败）。
+
+## Entity: ArrayMemberSection (2026-06-15 新增)
+- Purpose: 表示 cfg 中结构体数组成员的单个下标 section。
+- Fields:
+  - `member_name` (string): 成员名，例如 `VCPI_QPG_LAMBDA`。
+  - `index` (int): 数组下标，例如 `0`。
+  - `section_head` (string): cfg section 头字符串，例如 `VCPI_QPG_LAMBDA[0]`。
+  - `word_offset` (int): 在 `t_reg_vcpi` 中的 uint32_t 偏移，等于 `member_word_offset + index`。
+- Validation:
+  - `0 <= index < array_len`。
+  - `section_head` 格式为 `{member_name}[{index}]`（纯十进制整数下标）。
+  - 同一输入文件中 `(member_name, index)` 组合必须唯一；重复出现视为输入错误并快速失败。
 
 ## Entity: GenerationContext
 - Purpose: 单次运行上下文。
